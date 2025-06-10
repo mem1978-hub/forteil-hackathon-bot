@@ -253,7 +253,7 @@ ${categoryText}
 🏆 *Top Idé-Generatorer:*
 ${topUsersText}
 
-💪 *Status:* ${stats.total > 10 ? 'Vi er klar til at rocke hackathon! 🚀' : 'Vi har brug for flere idéer! Kom nu, folk! 💪'}
+💪 *Status:* ${stats.total > 10 ? 'Vi er klar til at rocke hackathon! 🚀' : 'Vi har brug for flere idéer! Kom nu, folk! <!channel>'}
 
 _Fortsæt med at dele idéer i #hackathon-ideas!_
     `;
@@ -278,11 +278,11 @@ cron.schedule('0 9 * * *', async () => {
     if (!stats || stats.total === 0) return;
     
     const motivationalMessages = [
-      `🌅 God morgen, idé-maskinerne! Vi har ${stats.total} fantastiske idéer indtil nu!`,
-      `☕ Kaffe-tid! Vores idé-tæller står på ${stats.total} - skal vi runde op?`,
-      `🧠 Dagens brainstorm-update: ${stats.total} idéer og counting!`,
-      `⚡ Lightning round! Vi har ${stats.total} idéer - hvad kommer der næst?`,
-      `🎯 Målrettet opdatering: ${stats.total} idéer på tavlen!`
+      `🌅 God morgen, idé-maskiner, alle jer vidunderlige Forteilees! Vi har ${stats.total} fantastiske idéer indtil nu!`,
+      `☕ Kaffe-tid! Vores idé-tæller står på ${stats.total} - skal vi runde op, kære Forteilees?`,
+      `🧠 Dagens brainstorm-update: ${stats.total} idéer og counting, fantastiske Forteilees!`,
+      `⚡ Lightning round! Vi har ${stats.total} idéer - hvad kommer der næst, dygtige Forteilees?`,
+      `🎯 Målrettet opdatering: ${stats.total} idéer på tavlen, vidunderlige Forteilees!`
     ];
     
     const randomMessage = motivationalMessages[Math.floor(Math.random() * motivationalMessages.length)];
@@ -294,7 +294,7 @@ cron.schedule('0 9 * * *', async () => {
     
     await app.client.chat.postMessage({
       channel: process.env.HACKATHON_CHANNEL_ID,
-      text: `${randomMessage}${categoryText}\n\n💡 Brug /hackathon-stats for fuld oversigt!`
+      text: `${randomMessage}${categoryText}\n\n💡 Brug /hackathon-stats for fuld oversigt!\n\n<!channel> Få delt flere idéer! 🚀`
     });
     
   } catch (error) {
