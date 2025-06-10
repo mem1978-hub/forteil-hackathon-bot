@@ -124,7 +124,7 @@ const getIdeaStats = async () => {
 // Main message handler
 app.message(async ({ message, client }) => {
   // Kun reagér i hackathon-ideas kanalen og ignorer bot beskeder
-  if (!message.channel || message.channel !== process.env.HACKATHON_CHANNEL_ID || message.bot_id) {
+  if (message.bot_id) {
     return;
   }
 
