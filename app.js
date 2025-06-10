@@ -60,14 +60,14 @@ const categorizeIdea = (text) => {
 };
 
 // Database functions
-const saveIdea = async (userId, text, category, messageTs, channelId) => {
+const saveIdea = async (userId, username, text, category, messageTs, channelId) => {
   try {
     const query = `
       INSERT INTO ideas (user_id, username, idea_text, category, message_ts, channel_id, created_at)
       VALUES ($1, $2, $3, $4, $5, $6, NOW())
       RETURNING id
     `;
-    const result = await pool.query(query, [userId, `user_${userId.substr(-4)}`, text, category, messageTs, channelId]);
+    const result = await pool.query(query, [userId, username, text, category, messageTs, channelId]);
     return result.rows[0].id;
   } catch (error) {
     console.error('Error saving idea:', error);
@@ -141,19 +141,29 @@ app.message(async ({ message, client }) => {
   try {
     console.log(`Processing idea from user ${message.user}: ${message.text}`);
     
+    // Get real username
+    let username = 'Anonymous';
+    try {
+      const userInfo = await client.users.info({ user: message.user });
+      username = userInfo.user.display_name || userInfo.user.real_name || userInfo.user.name || 'Anonymous';
+    } catch (error) {
+      console.log('Could not fetch user info, using Anonymous');
+    }
+    
     // Categorize idea
     const category = categorizeIdea(message.text);
     
-    // Save to database (med simplified bruger info)
+    // Save to database with real username
     const ideaId = await saveIdea(
       message.user,
+      username,
       message.text,
       category.name,
       message.ts,
       message.channel
     );
     
-    console.log(`Saved idea with ID: ${ideaId}`);
+    console.log(`Saved idea with ID: ${ideaId} from ${username}`);
     
     // Add random reaction
     const randomReaction = reactions[Math.floor(Math.random() * reactions.length)];
