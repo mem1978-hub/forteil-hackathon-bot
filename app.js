@@ -40,7 +40,7 @@ const dadJokes = [
   "Hvorfor blev robotten fyret? Den havde for mange glitches i sin performance review! 🤖"
 ];
 
-const reactions = ['🚀', '💡', '⚡', '🎯', '🔥', '💎', '🌟', '👏', '🎉', '💪'];
+const reactions = ['rocket', 'bulb', 'zap', 'dart', 'fire', 'gem', 'star', 'clap', 'tada', 'muscle'];
 
 // Categorization logic
 const categorizeIdea = (text) => {
@@ -155,7 +155,7 @@ app.message(async ({ message, client }) => {
     await client.reactions.add({
       channel: message.channel,
       timestamp: message.ts,
-      name: randomReaction.replace(/:/g, '')
+      name: randomReaction
     });
     
     // Add category reaction
