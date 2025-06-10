@@ -1,4 +1,4 @@
-// === HOVEDFIL: app.js ===
+// SIMPLIFIED VERSION - app.js
 const { App } = require('@slack/bolt');
 const { Pool } = require('pg');
 const cron = require('node-cron');
@@ -60,14 +60,14 @@ const categorizeIdea = (text) => {
 };
 
 // Database functions
-const saveIdea = async (userId, username, text, category, messageTs, channelId) => {
+const saveIdea = async (userId, text, category, messageTs, channelId) => {
   try {
     const query = `
       INSERT INTO ideas (user_id, username, idea_text, category, message_ts, channel_id, created_at)
       VALUES ($1, $2, $3, $4, $5, $6, NOW())
       RETURNING id
     `;
-    const result = await pool.query(query, [userId, username, text, category, messageTs, channelId]);
+    const result = await pool.query(query, [userId, `user_${userId.substr(-4)}`, text, category, messageTs, channelId]);
     return result.rows[0].id;
   } catch (error) {
     console.error('Error saving idea:', error);
@@ -123,28 +123,32 @@ const getIdeaStats = async () => {
 
 // Main message handler
 app.message(async ({ message, client }) => {
-  // Kun reagér i hackathon-ideas kanalen og ignorer bot beskeder
+  // Ignorer bot beskeder
   if (message.bot_id) {
     return;
   }
 
+  // Kun reagér i hackathon kanalen (hvis defineret)
+  if (process.env.HACKATHON_CHANNEL_ID && message.channel !== process.env.HACKATHON_CHANNEL_ID) {
+    return;
+  }
+
   try {
-    // Get user info
-    const userInfo = await client.users.info({ user: message.user });
-    const username = userInfo.user.real_name || userInfo.user.name;
+    console.log(`Processing message from user ${message.user}: ${message.text}`);
     
     // Categorize idea
     const category = categorizeIdea(message.text);
     
-    // Save to database
+    // Save to database (med simplified bruger info)
     const ideaId = await saveIdea(
       message.user,
-      username,
       message.text,
       category.name,
       message.ts,
       message.channel
     );
+    
+    console.log(`Saved idea with ID: ${ideaId}`);
     
     // Add random reaction
     const randomReaction = reactions[Math.floor(Math.random() * reactions.length)];
@@ -161,6 +165,8 @@ app.message(async ({ message, client }) => {
       name: category.emoji
     });
     
+    console.log('Added reactions successfully');
+    
     // Wait for dramatic effect
     setTimeout(async () => {
       const randomResponse = funnyResponses[Math.floor(Math.random() * funnyResponses.length)];
@@ -170,6 +176,8 @@ app.message(async ({ message, client }) => {
         text: randomResponse,
         thread_ts: message.ts
       });
+      
+      console.log('Sent response successfully');
       
       // Save reaction to database
       if (ideaId) {
@@ -200,7 +208,7 @@ app.message(async ({ message, client }) => {
 });
 
 // Slash command for stats
-app.command('/hackathon-stats', async ({ command, ack, respond, client }) => {
+app.command('/hackathon-stats', async ({ command, ack, respond }) => {
   await ack();
   
   try {
@@ -211,13 +219,13 @@ app.command('/hackathon-stats', async ({ command, ack, respond, client }) => {
       return;
     }
     
-    const categoryText = stats.categories
-      .map(cat => `${cat.category}: ${cat.count}`)
-      .join('\n');
+    const categoryText = stats.categories.length > 0 ? 
+      stats.categories.map(cat => `${cat.category}: ${cat.count}`).join('\n') : 
+      'Ingen kategorier endnu';
     
-    const topUsersText = stats.topUsers
-      .map((user, index) => `${index + 1}. ${user.username}: ${user.idea_count} idéer`)
-      .join('\n');
+    const topUsersText = stats.topUsers.length > 0 ? 
+      stats.topUsers.map((user, index) => `${index + 1}. ${user.username}: ${user.idea_count} idéer`).join('\n') :
+      'Ingen brugere endnu';
     
     const statsMessage = `
 🎯 *Hackathon Idé-Status*
@@ -248,6 +256,8 @@ _Fortsæt med at dele idéer i #hackathon-ideas!_
 
 // Daily stats posting (kl. 9:00 hver dag)
 cron.schedule('0 9 * * *', async () => {
+  if (!process.env.HACKATHON_CHANNEL_ID) return;
+  
   try {
     const stats = await getIdeaStats();
     if (!stats || stats.total === 0) return;
@@ -263,7 +273,7 @@ cron.schedule('0 9 * * *', async () => {
     const randomMessage = motivationalMessages[Math.floor(Math.random() * motivationalMessages.length)];
     
     // Get most popular category
-    const topCategory = stats.categories[0];
+    const topCategory = stats.categories.length > 0 ? stats.categories[0] : null;
     const categoryText = topCategory ? 
       `\n🏆 Mest populære kategori: ${topCategory.category} (${topCategory.count} idéer)` : '';
     
