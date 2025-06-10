@@ -133,8 +133,13 @@ app.message(async ({ message, client }) => {
     return;
   }
 
+  // Kun reagér på beskeder der starter med "Ide" (case insensitive)
+  if (!message.text || !message.text.toLowerCase().startsWith('ide')) {
+    return;
+  }
+
   try {
-    console.log(`Processing message from user ${message.user}: ${message.text}`);
+    console.log(`Processing idea from user ${message.user}: ${message.text}`);
     
     // Categorize idea
     const category = categorizeIdea(message.text);
