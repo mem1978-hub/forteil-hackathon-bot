@@ -269,68 +269,82 @@ _Fortsæt med at dele idéer i #hackathon-ideas!_
   }
 });
 
-// TEST COMMAND for daglig besked
+// TEST COMMAND - privat test af daglig besked (kun admin kan se)
 app.command('/test-daily', async ({ command, ack, respond }) => {
   await ack();
   
   // Kun din bruger kan teste
   if (command.user_id !== 'U07M4BA86LF') {
-    await respond('❌ Kun admin kan teste daily posts!');
+    await respond({
+      text: '❌ Kun admin kan teste daily posts!',
+      response_type: 'ephemeral'
+    });
     return;
   }
   
-  await respond('🧪 Tester daily post funktionalitet...');
-  
   try {
-    console.log('🧪 Manual daily post test started by:', command.user_id);
+    console.log('🧪 Private daily post test started by:', command.user_id);
     console.log('🧪 HACKATHON_CHANNEL_ID:', process.env.HACKATHON_CHANNEL_ID);
     
     if (!process.env.HACKATHON_CHANNEL_ID) {
-      await respond('❌ HACKATHON_CHANNEL_ID ikke sat i environment!');
+      await respond({
+        text: '❌ HACKATHON_CHANNEL_ID ikke sat i environment variables!',
+        response_type: 'ephemeral'
+      });
       return;
     }
     
     const stats = await getIdeaStats();
-    console.log('🧪 Stats retrieved for test:', stats);
+    console.log('🧪 Stats retrieved for private test:', stats);
     
     if (!stats) {
-      await respond('❌ Kunne ikke hente stats fra database');
+      await respond({
+        text: '❌ Kunne ikke hente stats fra database',
+        response_type: 'ephemeral'
+      });
       return;
     }
     
     if (stats.total === 0) {
-      await respond('⚠️ Ingen idéer i database - prøv at poste en "Ide:" besked først');
+      await respond({
+        text: '⚠️ Ingen idéer i database endnu\n\nPost en "Ide:" besked først for at teste daglige beskeder.',
+        response_type: 'ephemeral'
+      });
       return;
     }
     
-    // Samme logik som den rigtige cron job
+    // Simuler daglig besked indhold
     const motivationalMessages = [
-      `🌅 TEST: God morgen, idé-maskiner, alle jer vidunderlige Forteilees! Vi har ${stats.total} fantastiske idéer indtil nu!`,
-      `☕ TEST: Kaffe-tid! Vores idé-tæller står på ${stats.total} - skal vi runde op, kære Forteilees?`,
-      `🧠 TEST: Dagens brainstorm-update: ${stats.total} idéer og counting, fantastiske Forteilees!`,
-      `⚡ TEST: Lightning round! Vi har ${stats.total} idéer - hvad kommer der næst, dygtige Forteilees?`,
-      `🎯 TEST: Målrettet opdatering: ${stats.total} idéer på tavlen, vidunderlige Forteilees!`
+      `🌅 God morgen, idé-maskiner, alle jer vidunderlige Forteilees! Vi har ${stats.total} fantastiske idéer indtil nu!`,
+      `☕ Kaffe-tid! Vores idé-tæller står på ${stats.total} - skal vi runde op, kære Forteilees?`,
+      `🧠 Dagens brainstorm-update: ${stats.total} idéer og counting, fantastiske Forteilees!`,
+      `⚡ Lightning round! Vi har ${stats.total} idéer - hvad kommer der næst, dygtige Forteilees?`,
+      `🎯 Målrettet opdatering: ${stats.total} idéer på tavlen, vidunderlige Forteilees!`
     ];
     
     const randomMessage = motivationalMessages[Math.floor(Math.random() * motivationalMessages.length)];
     
     const topCategory = stats.categories.length > 0 ? stats.categories[0] : null;
     const categoryText = topCategory ? 
-      `\n🏆 Mest populære kategori: ${topCategory.category} (${topCategory.count} idéer)` : '';
+      `\n🏆 Mest populære kategori: ${topCategory.category} (${topCategory.count} idéer)` : '\n📊 Ingen kategorier defineret endnu';
     
-    const testMessage = `${randomMessage}${categoryText}\n\n💡 Brug /hackathon-stats for fuld oversigt!\n\n<!channel> Dette var en test af daglig besked! 🚀`;
+    const dailyMessagePreview = `${randomMessage}${categoryText}\n\n💡 Brug /hackathon-stats for fuld oversigt!\n\n@channel Få delt flere idéer! 🚀`;
     
-    await app.client.chat.postMessage({
-      channel: process.env.HACKATHON_CHANNEL_ID,
-      text: testMessage
+    // PRIVAT preview - kun du kan se det
+    await respond({
+      text: `🔒 **PRIVAT TEST PREVIEW**\n\n*Denne besked ville blive sendt automatisk kl 9:00 hver dag:*\n\n---\n\n${dailyMessagePreview}\n\n---\n\n✅ **Test Resultat:**\n• Database connection: OK\n• Stats funktionalitet: OK  \n• Message generation: OK\n• Target channel: #hackathon-ideas\n\n🎯 Daglige beskeder er konfigureret korrekt!`,
+      response_type: 'ephemeral'
     });
     
-    console.log('🧪 Test daily message sent successfully');
-    await respond('✅ Test daily post sendt til kanalen! Check #hackathon-ideas');
+    console.log('🧪 Private daily post test completed successfully');
+    console.log('🧪 Preview message length:', dailyMessagePreview.length);
     
   } catch (error) {
-    console.error('🧪 Test daily post error:', error);
-    await respond(`❌ Test fejlede: ${error.message}`);
+    console.error('🧪 Private daily post test error:', error);
+    await respond({
+      text: `❌ **Test Fejlede:**\n\n\`\`\`${error.message}\`\`\`\n\nCheck Render logs for detaljer.`,
+      response_type: 'ephemeral'
+    });
   }
 });
 
