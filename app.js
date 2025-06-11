@@ -225,7 +225,47 @@ app.message(async ({ message, client }) => {
 // Slash command for stats
 app.command('/hackathon-stats', async ({ command, ack, respond }) => {
   await ack();
+
+  // TEST COMMAND - Tilføj denne sektion lige her
+app.command('/test-daily', async ({ command, ack, respond }) => {
+  await ack();
   
+  if (command.user_id !== 'U07M4BA86LF') {
+    await respond('❌ Kun admin!');
+    return;
+  }
+  
+  await respond('🧪 Tester daily post...');
+  
+  try {
+    const stats = await getIdeaStats();
+    console.log('Test stats:', stats);
+    
+    if (!stats || stats.total === 0) {
+      await respond('❌ Ingen stats eller 0 idéer');
+      return;
+    }
+    
+    const randomMessage = `🧪 TEST: Vi har ${stats.total} idéer!`;
+    
+    await app.client.chat.postMessage({
+      channel: process.env.HACKATHON_CHANNEL_ID,
+      text: `${randomMessage}\n\n<!channel> Dette er en test! 🚀`
+    });
+    
+    await respond('✅ Test sendt!');
+    
+  } catch (error) {
+    console.error('Test error:', error);
+    await respond('❌ Test fejlede: ' + error.message);
+  }
+});
+
+// Daily stats posting (kl. 9:00 hver dag) - denne sektion findes allerede
+cron.schedule('0 9 * * *', async () => {
+  // ... eksisterende cron kode
+});
+
   try {
     const stats = await getIdeaStats();
     
@@ -271,6 +311,25 @@ _Fortsæt med at dele idéer i #hackathon-ideas!_
 
 // Daily stats posting (kl. 9:00 hver dag)
 cron.schedule('0 9 * * *', async () => {
+  console.log('🕘 Daily cron job triggered at:', new Date().toISOString());
+  
+  if (!process.env.HACKATHON_CHANNEL_ID) {
+    console.log('❌ No HACKATHON_CHANNEL_ID set');
+    return;
+  }
+  
+  console.log('✅ Channel ID found:', process.env.HACKATHON_CHANNEL_ID);
+  
+  try {
+    const stats = await getIdeaStats();
+    console.log('📊 Stats retrieved:', stats);
+    
+    if (!stats || stats.total === 0) {
+      console.log('⏭️ No stats or zero ideas, skipping daily post');
+      return;
+    }
+    
+    // resten af koden...
   if (!process.env.HACKATHON_CHANNEL_ID) return;
   
   try {
