@@ -348,10 +348,11 @@ app.command('/test-daily', async ({ command, ack, respond }) => {
   }
 });
 
-// Daily stats posting (kl. 9:00 hver dag)
-cron.schedule('0 9 * * *', async () => {
-  console.log('🕘 Daily cron job triggered at:', new Date().toISOString());
-  console.log('🌍 Timezone info:', Intl.DateTimeFormat().resolvedOptions().timeZone);
+// Daily stats posting (MIDLERTIDIG PRIVAT TEST: hver 5. minut til Michael)
+cron.schedule('*/5 * * * *', async () => {
+  console.log('🕘 PRIVATE TEST: Daily cron job triggered at:', new Date().toISOString());
+  console.log('🌍 PRIVATE TEST: Timezone info:', Intl.DateTimeFormat().resolvedOptions().timeZone);
+  console.log('📍 PRIVATE TEST: Running 5-minute PRIVATE test - sending DM to Michael only');
   
   if (!process.env.HACKATHON_CHANNEL_ID) {
     console.log('❌ No HACKATHON_CHANNEL_ID set, skipping daily post');
@@ -362,10 +363,16 @@ cron.schedule('0 9 * * *', async () => {
   
   try {
     const stats = await getIdeaStats();
-    console.log('📊 Daily cron stats retrieved:', stats);
+    console.log('📊 PRIVATE TEST: Cron stats retrieved:', stats);
     
     if (!stats || stats.total === 0) {
-      console.log('⏭️ No stats or zero ideas, skipping daily post');
+      console.log('⏭️ PRIVATE TEST: No stats or zero ideas, would skip daily post');
+      
+      // Send privat besked om at der ikke er nok data
+      await app.client.chat.postMessage({
+        channel: 'U07M4BA86LF', // Din user ID - privat DM
+        text: `🔒 **PRIVAT 5-MIN TEST**\n\n⚠️ Ingen idéer i database - daglig besked ville blive sprunget over.\n\nPost en "Ide:" besked for at teste med rigtige data.\n\n*Tid: ${new Date().toLocaleTimeString('da-DK', {timeZone: 'Europe/Copenhagen'})}*`
+      });
       return;
     }
     
@@ -384,17 +391,24 @@ cron.schedule('0 9 * * *', async () => {
     const categoryText = topCategory ? 
       `\n🏆 Mest populære kategori: ${topCategory.category} (${topCategory.count} idéer)` : '';
     
-    const dailyMessage = `${randomMessage}${categoryText}\n\n💡 Brug /hackathon-stats for fuld oversigt!\n\n<!channel> Få delt flere idéer! 🚀`;
+    const dailyMessage = `${randomMessage}${categoryText}\n\n💡 Brug /hackathon-stats for fuld oversigt!\n\n@channel Få delt flere idéer! 🚀`;
     
+    // SEND PRIVAT TIL DIG - ikke til kanalen
     await app.client.chat.postMessage({
-      channel: process.env.HACKATHON_CHANNEL_ID,
-      text: dailyMessage
+      channel: 'U07M4BA86LF', // Din user ID - privat DM til dig
+      text: `🔒 **PRIVAT 5-MIN CRON TEST**\n\n*Denne besked ville blive sendt til #hackathon-ideas:*\n\n---\n\n${dailyMessage}\n\n---\n\n✅ **Cron Job Virker!**\n• Tid: ${new Date().toLocaleTimeString('da-DK', {timeZone: 'Europe/Copenhagen'})}\n• Database: OK\n• Message generation: OK\n\n🎯 Daglige beskeder fungerer korrekt!\n\n*Husk at skifte tilbage til daglig kl 9:00 når test er færdig.*`
     });
     
-    console.log('✅ Daily motivational message sent successfully');
+    console.log('✅ PRIVATE TEST: Daily motivational message sent as private DM');
     
   } catch (error) {
-    console.error('❌ Error sending daily stats:', error);
+    console.error('❌ PRIVATE TEST: Error in 5-min cron test:', error);
+    
+    // Send fejl besked privat til dig
+    await app.client.chat.postMessage({
+      channel: 'U07M4BA86LF', // Din user ID
+      text: `🔒 **PRIVAT 5-MIN TEST FEJL**\n\n❌ Cron job fejlede:\n\n\`\`\`${error.message}\`\`\`\n\nTid: ${new Date().toLocaleTimeString('da-DK', {timeZone: 'Europe/Copenhagen'})}`
+    });
   }
 }, {
   timezone: "Europe/Copenhagen"
