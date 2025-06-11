@@ -584,8 +584,8 @@ Start din besked med "Ide:" efterfulgt af din idé:
   });
 });
 
-// Health check endpoint
-app.receiver.app.get('/health', async (req, res) => {
+// Health check endpoint - fixed for Slack Bolt framework
+app.receiver.router.get('/health', async (req, res) => {
   const requestId = generateRequestId();
   
   try {
