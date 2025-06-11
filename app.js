@@ -225,47 +225,7 @@ app.message(async ({ message, client }) => {
 // Slash command for stats
 app.command('/hackathon-stats', async ({ command, ack, respond }) => {
   await ack();
-
-  // TEST COMMAND - Tilføj denne sektion lige her
-app.command('/test-daily', async ({ command, ack, respond }) => {
-  await ack();
   
-  if (command.user_id !== 'U07M4BA86LF') {
-    await respond('❌ Kun admin!');
-    return;
-  }
-  
-  await respond('🧪 Tester daily post...');
-  
-  try {
-    const stats = await getIdeaStats();
-    console.log('Test stats:', stats);
-    
-    if (!stats || stats.total === 0) {
-      await respond('❌ Ingen stats eller 0 idéer');
-      return;
-    }
-    
-    const randomMessage = `🧪 TEST: Vi har ${stats.total} idéer!`;
-    
-    await app.client.chat.postMessage({
-      channel: process.env.HACKATHON_CHANNEL_ID,
-      text: `${randomMessage}\n\n<!channel> Dette er en test! 🚀`
-    });
-    
-    await respond('✅ Test sendt!');
-    
-  } catch (error) {
-    console.error('Test error:', error);
-    await respond('❌ Test fejlede: ' + error.message);
-  }
-});
-
-// Daily stats posting (kl. 9:00 hver dag) - denne sektion findes allerede
-cron.schedule('0 9 * * *', async () => {
-  // ... eksisterende cron kode
-});
-
   try {
     const stats = await getIdeaStats();
     
@@ -309,12 +269,78 @@ _Fortsæt med at dele idéer i #hackathon-ideas!_
   }
 });
 
+// TEST COMMAND for daglig besked
+app.command('/test-daily', async ({ command, ack, respond }) => {
+  await ack();
+  
+  // Kun din bruger kan teste
+  if (command.user_id !== 'U07M4BA86LF') {
+    await respond('❌ Kun admin kan teste daily posts!');
+    return;
+  }
+  
+  await respond('🧪 Tester daily post funktionalitet...');
+  
+  try {
+    console.log('🧪 Manual daily post test started by:', command.user_id);
+    console.log('🧪 HACKATHON_CHANNEL_ID:', process.env.HACKATHON_CHANNEL_ID);
+    
+    if (!process.env.HACKATHON_CHANNEL_ID) {
+      await respond('❌ HACKATHON_CHANNEL_ID ikke sat i environment!');
+      return;
+    }
+    
+    const stats = await getIdeaStats();
+    console.log('🧪 Stats retrieved for test:', stats);
+    
+    if (!stats) {
+      await respond('❌ Kunne ikke hente stats fra database');
+      return;
+    }
+    
+    if (stats.total === 0) {
+      await respond('⚠️ Ingen idéer i database - prøv at poste en "Ide:" besked først');
+      return;
+    }
+    
+    // Samme logik som den rigtige cron job
+    const motivationalMessages = [
+      `🌅 TEST: God morgen, idé-maskiner, alle jer vidunderlige Forteilees! Vi har ${stats.total} fantastiske idéer indtil nu!`,
+      `☕ TEST: Kaffe-tid! Vores idé-tæller står på ${stats.total} - skal vi runde op, kære Forteilees?`,
+      `🧠 TEST: Dagens brainstorm-update: ${stats.total} idéer og counting, fantastiske Forteilees!`,
+      `⚡ TEST: Lightning round! Vi har ${stats.total} idéer - hvad kommer der næst, dygtige Forteilees?`,
+      `🎯 TEST: Målrettet opdatering: ${stats.total} idéer på tavlen, vidunderlige Forteilees!`
+    ];
+    
+    const randomMessage = motivationalMessages[Math.floor(Math.random() * motivationalMessages.length)];
+    
+    const topCategory = stats.categories.length > 0 ? stats.categories[0] : null;
+    const categoryText = topCategory ? 
+      `\n🏆 Mest populære kategori: ${topCategory.category} (${topCategory.count} idéer)` : '';
+    
+    const testMessage = `${randomMessage}${categoryText}\n\n💡 Brug /hackathon-stats for fuld oversigt!\n\n<!channel> Dette var en test af daglig besked! 🚀`;
+    
+    await app.client.chat.postMessage({
+      channel: process.env.HACKATHON_CHANNEL_ID,
+      text: testMessage
+    });
+    
+    console.log('🧪 Test daily message sent successfully');
+    await respond('✅ Test daily post sendt til kanalen! Check #hackathon-ideas');
+    
+  } catch (error) {
+    console.error('🧪 Test daily post error:', error);
+    await respond(`❌ Test fejlede: ${error.message}`);
+  }
+});
+
 // Daily stats posting (kl. 9:00 hver dag)
 cron.schedule('0 9 * * *', async () => {
   console.log('🕘 Daily cron job triggered at:', new Date().toISOString());
+  console.log('🌍 Timezone info:', Intl.DateTimeFormat().resolvedOptions().timeZone);
   
   if (!process.env.HACKATHON_CHANNEL_ID) {
-    console.log('❌ No HACKATHON_CHANNEL_ID set');
+    console.log('❌ No HACKATHON_CHANNEL_ID set, skipping daily post');
     return;
   }
   
@@ -322,19 +348,12 @@ cron.schedule('0 9 * * *', async () => {
   
   try {
     const stats = await getIdeaStats();
-    console.log('📊 Stats retrieved:', stats);
+    console.log('📊 Daily cron stats retrieved:', stats);
     
     if (!stats || stats.total === 0) {
       console.log('⏭️ No stats or zero ideas, skipping daily post');
       return;
     }
-    
-    // resten af koden...
-  if (!process.env.HACKATHON_CHANNEL_ID) return;
-  
-  try {
-    const stats = await getIdeaStats();
-    if (!stats || stats.total === 0) return;
     
     const motivationalMessages = [
       `🌅 God morgen, idé-maskiner, alle jer vidunderlige Forteilees! Vi har ${stats.total} fantastiske idéer indtil nu!`,
@@ -351,14 +370,20 @@ cron.schedule('0 9 * * *', async () => {
     const categoryText = topCategory ? 
       `\n🏆 Mest populære kategori: ${topCategory.category} (${topCategory.count} idéer)` : '';
     
+    const dailyMessage = `${randomMessage}${categoryText}\n\n💡 Brug /hackathon-stats for fuld oversigt!\n\n<!channel> Få delt flere idéer! 🚀`;
+    
     await app.client.chat.postMessage({
       channel: process.env.HACKATHON_CHANNEL_ID,
-      text: `${randomMessage}${categoryText}\n\n💡 Brug /hackathon-stats for fuld oversigt!\n\n<!channel> Få delt flere idéer! 🚀`
+      text: dailyMessage
     });
     
+    console.log('✅ Daily motivational message sent successfully');
+    
   } catch (error) {
-    console.error('Error sending daily stats:', error);
+    console.error('❌ Error sending daily stats:', error);
   }
+}, {
+  timezone: "Europe/Copenhagen"
 });
 
 // Initialize database
