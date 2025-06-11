@@ -1,4 +1,4 @@
-// Forteil Hackathon Bot - Production Ready Version
+// Forteil Hackathon Bot - Production Ready Version (Working)
 const { App } = require('@slack/bolt');
 const { Pool } = require('pg');
 const cron = require('node-cron');
@@ -138,43 +138,26 @@ const getIdeaStats = async (requestId) => {
     logWithContext('info', 'Fetching idea statistics', { requestId });
     
     const query = `
-      WITH stats AS (
-        SELECT 
-          COUNT(*) as total,
-          json_agg(
-            json_build_object(
-              'category', category,
-              'count', category_count
-            ) ORDER BY category_count DESC
-          ) as categories,
-          json_agg(
-            json_build_object(
-              'username', username,
-              'idea_count', user_count
-            ) ORDER BY user_count DESC
-          ) as top_users
-        FROM (
-          SELECT 
-            category,
-            COUNT(*) as category_count,
-            username,
-            COUNT(*) OVER (PARTITION BY username) as user_count
-          FROM ideas
-          GROUP BY category, username
-        ) t
+      WITH category_stats AS (
+        SELECT category, COUNT(*) as count
+        FROM ideas 
+        GROUP BY category 
+        ORDER BY count DESC
+      ),
+      user_stats AS (
+        SELECT username, COUNT(*) as idea_count
+        FROM ideas 
+        GROUP BY username 
+        ORDER BY idea_count DESC
+        LIMIT 5
+      ),
+      total_stats AS (
+        SELECT COUNT(*) as total FROM ideas
       )
       SELECT 
-        total,
-        (
-          SELECT json_agg(DISTINCT cat)
-          FROM json_array_elements(categories) cat
-        ) as categories,
-        (
-          SELECT json_agg(DISTINCT usr)
-          FROM json_array_elements(top_users) usr
-          LIMIT 5
-        ) as top_users
-      FROM stats;
+        (SELECT total FROM total_stats) as total,
+        (SELECT json_agg(json_build_object('category', category, 'count', count)) FROM category_stats) as categories,
+        (SELECT json_agg(json_build_object('username', username, 'idea_count', idea_count)) FROM user_stats) as top_users
     `;
     
     const result = await pool.query(query);
@@ -411,12 +394,6 @@ app.command('/hackathon-stats', async ({ command, ack, respond }) => {
     
     logWithContext('info', 'Stats command requested', { requestId, userId: command.user_id });
     
-    // Show loading state
-    await respond({
-      text: '📊 Henter statistikker... ⏳',
-      response_type: 'ephemeral'
-    });
-    
     const stats = await getIdeaStats(requestId);
     
     if (!stats) {
@@ -453,8 +430,7 @@ _Fortsæt med at dele idéer i #hackathon-ideas!_
     
     await respond({
       text: statsMessage,
-      response_type: 'in_channel',
-      replace_original: true
+      response_type: 'in_channel'
     });
     
     logWithContext('info', 'Stats command completed', { requestId, totalIdeas: stats.total });
@@ -463,8 +439,7 @@ _Fortsæt med at dele idéer i #hackathon-ideas!_
     logWithContext('error', 'Stats command failed', { requestId, error: error.message });
     await respond({
       text: '❌ Ups! Noget gik galt ved hentning af statistikker. Prøv igen om lidt! 🤖',
-      response_type: 'ephemeral',
-      replace_original: true
+      response_type: 'ephemeral'
     });
   }
 });
@@ -494,16 +469,10 @@ app.command('/motivate-now', async ({ command, ack, respond }) => {
     
     logWithContext('info', 'Manual motivation triggered', { requestId, adminId: command.user_id });
     
-    await respond({
-      text: '🚀 Sender motivationsbesked... ⏳',
-      response_type: 'ephemeral'
-    });
-    
     if (!process.env.HACKATHON_CHANNEL_ID) {
       await respond({
         text: '❌ HACKATHON_CHANNEL_ID ikke konfigureret!',
-        response_type: 'ephemeral',
-        replace_original: true
+        response_type: 'ephemeral'
       });
       return;
     }
@@ -513,8 +482,7 @@ app.command('/motivate-now', async ({ command, ack, respond }) => {
     if (!stats || stats.total === 0) {
       await respond({
         text: '⚠️ Ingen idéer i database endnu - post nogle "Ide:" beskeder først!',
-        response_type: 'ephemeral',
-        replace_original: true
+        response_type: 'ephemeral'
       });
       return;
     }
@@ -528,8 +496,7 @@ app.command('/motivate-now', async ({ command, ack, respond }) => {
     
     await respond({
       text: `✅ **Manuel motivationsbesked sendt!**\n\n📊 Stats: ${stats.total} idéer\n🕐 Tid: ${new Date().toLocaleTimeString('da-DK', {timeZone: 'Europe/Copenhagen'})}\n🎯 Besked sendt til #hackathon-ideas`,
-      response_type: 'ephemeral',
-      replace_original: true
+      response_type: 'ephemeral'
     });
     
     logWithContext('info', 'Manual motivation sent successfully', { requestId, totalIdeas: stats.total });
@@ -538,8 +505,7 @@ app.command('/motivate-now', async ({ command, ack, respond }) => {
     logWithContext('error', 'Manual motivation failed', { requestId, error: error.message });
     await respond({
       text: `❌ **Fejl ved afsendelse:**\n\n\`\`\`${error.message}\`\`\``,
-      response_type: 'ephemeral',
-      replace_original: true
+      response_type: 'ephemeral'
     });
   }
 });
@@ -582,45 +548,6 @@ Start din besked med "Ide:" efterfulgt af din idé:
     text: helpMessage,
     response_type: 'ephemeral'
   });
-});
-
-// Health check endpoint - fixed for Slack Bolt framework
-app.receiver.router.get('/health', async (req, res) => {
-  const requestId = generateRequestId();
-  
-  try {
-    // Test database connection
-    const dbResult = await pool.query('SELECT 1 as health_check');
-    const dbHealthy = dbResult.rows[0].health_check === 1;
-    
-    // Test Slack API
-    const slackResult = await app.client.auth.test();
-    const slackHealthy = slackResult.ok;
-    
-    const health = {
-      status: dbHealthy && slackHealthy ? 'healthy' : 'unhealthy',
-      timestamp: new Date().toISOString(),
-      services: {
-        database: dbHealthy ? 'healthy' : 'unhealthy',
-        slack: slackHealthy ? 'healthy' : 'unhealthy'
-      },
-      uptime: process.uptime(),
-      version: '2.0.0'
-    };
-    
-    logWithContext('info', 'Health check performed', { requestId, ...health });
-    
-    res.status(dbHealthy && slackHealthy ? 200 : 503).json(health);
-    
-  } catch (error) {
-    logWithContext('error', 'Health check failed', { requestId, error: error.message });
-    
-    res.status(503).json({
-      status: 'unhealthy',
-      timestamp: new Date().toISOString(),
-      error: error.message
-    });
-  }
 });
 
 // Daily motivation cron with enhanced error handling
