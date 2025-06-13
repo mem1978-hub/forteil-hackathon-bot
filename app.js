@@ -530,7 +530,9 @@ Start din besked med "Ide:" efterfulgt af din idé:
 **📊 Available Commands:**
 • \`/hackathon-stats\` - Se alle statistikker
 • \`/hackathon-help\` - Denne hjælp besked
+• \`/leaderboard\` - Live rangliste (alle kan se)
 • \`/motivate-now\` - Admin: Send motivation nu
+• \`/show-ideas\` - Admin: Visuelt overblik
 
 **🏷️ Kategorier:**
 🤖 AI & Automatisering • 🔗 Integrationer • ⚙️ Procesoptimering
@@ -540,6 +542,7 @@ Start din besked med "Ide:" efterfulgt af din idé:
 • Vær specifik i dine idé-beskrivelser
 • Byg videre på andres idéer
 • Brug /hackathon-stats for at se fremgang
+• Check /leaderboard for at se din ranking
 
 **🚀 Ready to innovate? Start med "Ide:" og lad kreativiteten flyde!**
   `;
@@ -548,6 +551,377 @@ Start din besked med "Ide:" efterfulgt af din idé:
     text: helpMessage,
     response_type: 'ephemeral'
   });
+});
+
+// VISUAL EXPORT COMMAND - Flot visuelt output direkte i Slack
+app.command('/show-ideas', async ({ command, ack, respond }) => {
+  const requestId = generateRequestId();
+  await ack();
+  
+  try {
+    // Kun admin kan vise alle idéer
+    if (command.user_id !== CONFIG.adminUserId) {
+      await respond({
+        text: '❌ Kun admin kan vise alle idéer!',
+        response_type: 'ephemeral'
+      });
+      return;
+    }
+    
+    logWithContext('info', 'Visual ideas export requested', { requestId, adminId: command.user_id });
+    
+    await respond({
+      text: '🎨 Genererer visuelt overblik... ⏳',
+      response_type: 'ephemeral'
+    });
+    
+    // Hent alle idéer med detaljeret information
+    const ideasQuery = `
+      SELECT 
+        i.id,
+        i.username,
+        i.idea_text,
+        i.category,
+        i.created_at,
+        COUNT(r.id) as reaction_count
+      FROM ideas i
+      LEFT JOIN reactions r ON i.id = r.idea_id
+      GROUP BY i.id, i.username, i.idea_text, i.category, i.created_at
+      ORDER BY i.created_at DESC
+    `;
+    
+    const result = await executeWithRetry(async () => {
+      return await pool.query(ideasQuery);
+    });
+    
+    const ideas = result.rows;
+    
+    if (ideas.length === 0) {
+      await respond({
+        text: '⚠️ Ingen idéer at vise endnu!',
+        response_type: 'ephemeral',
+        replace_original: true
+      });
+      return;
+    }
+    
+    // Generer statistikker
+    const totalIdeas = ideas.length;
+    const uniqueUsers = new Set(ideas.map(i => i.username)).size;
+    const totalReactions = ideas.reduce((sum, idea) => sum + parseInt(idea.reaction_count), 0);
+    
+    // Kategori statistikker
+    const categoryStats = ideas.reduce((acc, idea) => {
+      acc[idea.category] = (acc[idea.category] || 0) + 1;
+      return acc;
+    }, {});
+    
+    // Top brugere
+    const userStats = ideas.reduce((acc, idea) => {
+      acc[idea.username] = (acc[idea.username] || 0) + 1;
+      return acc;
+    }, {});
+    
+    const topUsers = Object.entries(userStats)
+      .sort(([,a], [,b]) => b - a)
+      .slice(0, 5);
+    
+    // Daglig aktivitet
+    const dailyStats = ideas.reduce((acc, idea) => {
+      const date = new Date(idea.created_at).toLocaleDateString('da-DK');
+      acc[date] = (acc[date] || 0) + 1;
+      return acc;
+    }, {});
+    
+    // Generér visuelt overblik
+    const visualOverview = {
+      "blocks": [
+        {
+          "type": "header",
+          "text": {
+            "type": "plain_text",
+            "text": "🚀 Forteil Hackathon - Idé Overblik",
+            "emoji": true
+          }
+        },
+        {
+          "type": "section",
+          "fields": [
+            {
+              "type": "mrkdwn",
+              "text": `*📊 Total Idéer:*\n${totalIdeas}`
+            },
+            {
+              "type": "mrkdwn",
+              "text": `*👥 Aktive Brugere:*\n${uniqueUsers}`
+            },
+            {
+              "type": "mrkdwn",
+              "text": `*💬 Total Reaktioner:*\n${totalReactions}`
+            },
+            {
+              "type": "mrkdwn",
+              "text": `*📈 Gennemsnit per Bruger:*\n${(totalIdeas / uniqueUsers).toFixed(1)}`
+            }
+          ]
+        },
+        {
+          "type": "divider"
+        },
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": `*🏷️ Kategori Fordeling:*\n${Object.entries(categoryStats)
+              .sort(([,a], [,b]) => b - a)
+              .map(([cat, count]) => `${cat}: ${count} idéer (${Math.round(count/totalIdeas*100)}%)`)
+              .join('\n')}`
+          }
+        },
+        {
+          "type": "divider"
+        },
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": `*🏆 Top Idé-Generatorer:*\n${topUsers
+              .map(([user, count], index) => `${index + 1}. *${user}*: ${count} idéer`)
+              .join('\n')}`
+          }
+        },
+        {
+          "type": "divider"
+        },
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": `*📅 Daglig Aktivitet:*\n${Object.entries(dailyStats)
+              .sort(([a], [b]) => new Date(a.split('.').reverse().join('-')) - new Date(b.split('.').reverse().join('-')))
+              .map(([date, count]) => `${date}: ${count} idéer`)
+              .join('\n')}`
+          }
+        },
+        {
+          "type": "divider"
+        }
+      ]
+    };
+    
+    // Tilføj de seneste idéer som separate blocks
+    const recentIdeas = ideas.slice(0, 10); // Vis de 10 seneste
+    
+    visualOverview.blocks.push({
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": `*💡 Seneste ${Math.min(10, ideas.length)} Idéer:*`
+      }
+    });
+    
+    recentIdeas.forEach((idea, index) => {
+      const date = new Date(idea.created_at);
+      const timeAgo = getTimeAgo(date);
+      
+      visualOverview.blocks.push({
+        "type": "section",
+        "text": {
+          "type": "mrkdwn",
+          "text": `*${index + 1}.* ${idea.idea_text.substring(0, 100)}${idea.idea_text.length > 100 ? '...' : ''}\n_${idea.category} • ${idea.username} • ${timeAgo} • ${idea.reaction_count} reaktioner_`
+        }
+      });
+    });
+    
+    // Tilføj footer
+    visualOverview.blocks.push(
+      {
+        "type": "divider"
+      },
+      {
+        "type": "context",
+        "elements": [
+          {
+            "type": "mrkdwn",
+            "text": `📊 Genereret: ${new Date().toLocaleString('da-DK', {timeZone: 'Europe/Copenhagen'})} | 🤖 Forteil Hackathon Bot v2.0`
+          }
+        ]
+      }
+    );
+    
+    await respond({
+      "replace_original": true,
+      "response_type": "ephemeral",
+      ...visualOverview
+    });
+    
+    logWithContext('info', 'Visual ideas export completed', { 
+      requestId, 
+      totalIdeas,
+      uniqueUsers,
+      totalReactions
+    });
+    
+  } catch (error) {
+    logWithContext('error', 'Visual ideas export failed', { requestId, error: error.message });
+    await respond({
+      text: `❌ **Visuelt overblik fejlede:**\n\n\`\`\`${error.message}\`\`\``,
+      response_type: 'ephemeral',
+      replace_original: true
+    });
+  }
+});
+
+// Helper function til "time ago" formatting
+function getTimeAgo(date) {
+  const now = new Date();
+  const diffInSeconds = Math.floor((now - date) / 1000);
+  
+  if (diffInSeconds < 60) return 'lige nu';
+  if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)} min siden`;
+  if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)} timer siden`;
+  if (diffInSeconds < 2592000) return `${Math.floor(diffInSeconds / 86400)} dage siden`;
+  return date.toLocaleDateString('da-DK');
+}
+
+// LIVE LEADERBOARD COMMAND - Real-time leaderboard
+app.command('/leaderboard', async ({ command, ack, respond }) => {
+  const requestId = generateRequestId();
+  await ack();
+  
+  try {
+    logWithContext('info', 'Leaderboard requested', { requestId, userId: command.user_id });
+    
+    // Hent leaderboard data  
+    const leaderboardQuery = `
+      SELECT 
+        username,
+        COUNT(*) as idea_count,
+        STRING_AGG(DISTINCT category, ', ') as categories,
+        MAX(created_at) as last_idea,
+        AVG(reaction_count) as avg_reactions
+      FROM (
+        SELECT 
+          i.username,
+          i.category,
+          i.created_at,
+          COUNT(r.id) as reaction_count
+        FROM ideas i
+        LEFT JOIN reactions r ON i.id = r.idea_id
+        GROUP BY i.id, i.username, i.category, i.created_at
+      ) stats
+      GROUP BY username
+      ORDER BY idea_count DESC, last_idea DESC
+      LIMIT 10
+    `;
+    
+    const result = await executeWithRetry(async () => {
+      return await pool.query(leaderboardQuery);
+    });
+    
+    const leaderboard = result.rows;
+    
+    if (leaderboard.length === 0) {
+      await respond({
+        text: '📊 Ingen data til leaderboard endnu!\n\nStart med at poste en idé: `Ide: Min fantastiske idé`',
+        response_type: 'ephemeral'
+      });
+      return;
+    }
+    
+    // Generer emoji trofæer
+    const getTrophy = (index) => {
+      if (index === 0) return '🏆';
+      if (index === 1) return '🥈';
+      if (index === 2) return '🥉';
+      return '🏅';
+    };
+    
+    const leaderboardBlocks = {
+      "blocks": [
+        {
+          "type": "header",
+          "text": {
+            "type": "plain_text",
+            "text": "🏆 Hackathon Leaderboard",
+            "emoji": true
+          }
+        },
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": "_Live ranking af idé-generatorer! 🚀_"
+          }
+        },
+        {
+          "type": "divider"
+        }
+      ]
+    };
+    
+    leaderboard.forEach((user, index) => {
+      const trophy = getTrophy(index);
+      const lastIdea = new Date(user.last_idea);
+      const timeAgo = getTimeAgo(lastIdea);
+      
+      leaderboardBlocks.blocks.push({
+        "type": "section",
+        "text": {
+          "type": "mrkdwn",
+          "text": `${trophy} *${index + 1}. ${user.username}*\n📊 ${user.idea_count} idéer • 🏷️ ${user.categories}\n⏰ Seneste: ${timeAgo} • 💬 Ø ${parseFloat(user.avg_reactions || 0).toFixed(1)} reaktioner`
+        }
+      });
+    });
+    
+    // Tilføj motivation footer
+    const motivationMessages = [
+      "🚀 Kom i gang med: `Ide: Din fantastiske idé her`",
+      "💡 Brug `/hackathon-help` for at se alle commands",
+      "🎯 Mål: 50+ idéer til hackathon!",
+      "⚡ Jo flere idéer, jo bedre hackathon!"
+    ];
+    
+    leaderboardBlocks.blocks.push(
+      {
+        "type": "divider"
+      },
+      {
+        "type": "section",
+        "text": {
+          "type": "mrkdwn",
+          "text": motivationMessages[Math.floor(Math.random() * motivationMessages.length)]
+        }
+      },
+      {
+        "type": "context",
+        "elements": [
+          {
+            "type": "mrkdwn",
+            "text": `🔄 Opdateret: ${new Date().toLocaleTimeString('da-DK', {timeZone: 'Europe/Copenhagen'})} | Brug \`/leaderboard\` for at opdatere`
+          }
+        ]
+      }
+    );
+    
+    await respond({
+      "response_type": "in_channel", // Synlig for alle - skaber konkurrence!
+      ...leaderboardBlocks
+    });
+    
+    logWithContext('info', 'Leaderboard displayed', { 
+      requestId,
+      totalUsers: leaderboard.length,
+      topUser: leaderboard[0]?.username
+    });
+    
+  } catch (error) {
+    logWithContext('error', 'Leaderboard failed', { requestId, error: error.message });
+    await respond({
+      text: `❌ Leaderboard kunne ikke indlæses: ${error.message}`,
+      response_type: 'ephemeral'
+    });
+  }
 });
 
 // Daily motivation cron with enhanced error handling
