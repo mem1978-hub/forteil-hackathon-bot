@@ -28,8 +28,8 @@ const rateLimitStore = new Map();
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-  max: 10, // maximum number of clients in pool
-  idleTimeoutMillis: 30000, // close idle clients after 30 seconds
+  max: 10,
+  idleTimeoutMillis: 30000,
   connectionTimeoutMillis: CONFIG.dbTimeout,
 });
 
@@ -48,7 +48,7 @@ const app = new App({
   port: process.env.PORT || 3000
 });
 
-// Shared constants - no duplication
+// Shared constants
 const MOTIVATIONAL_MESSAGES = [
   (total) => `🌅 God morgen, idé-maskiner, alle jer vidunderlige Forteilees! Vi har ${total} fantastiske idéer indtil nu!`,
   (total) => `☕ Kaffe-tid! Vores idé-tæller står på ${total} - skal vi runde op, kære Forteilees?`,
@@ -103,7 +103,6 @@ const isRateLimited = (userId) => {
   const now = Date.now();
   const userHistory = rateLimitStore.get(userId) || [];
   
-  // Remove old entries
   const validEntries = userHistory.filter(time => now - time < CONFIG.rateLimitWindow);
   
   if (validEntries.length >= CONFIG.rateLimitMax) {
@@ -115,7 +114,7 @@ const isRateLimited = (userId) => {
   return false;
 };
 
-// Database functions with error handling and optimization
+// Database functions with error handling
 const executeWithRetry = async (operation, maxRetries = CONFIG.maxRetries) => {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -130,7 +129,7 @@ const executeWithRetry = async (operation, maxRetries = CONFIG.maxRetries) => {
         throw error;
       }
       
-      await sleep(1000 * attempt); // Exponential backoff
+      await sleep(1000 * attempt);
     }
   }
 };
@@ -150,7 +149,6 @@ const getDailyReminderStatus = async (requestId) => {
     const result = await pool.query(query);
     
     if (result.rows.length === 0) {
-      // Default to enabled if no setting exists
       return true;
     }
     
@@ -176,7 +174,6 @@ const setDailyReminderStatus = async (enabled, requestId) => {
     
     await pool.query(query, [enabled.toString()]);
     
-    // Update in-memory state
     dailyReminderEnabled = enabled;
     
     logWithContext('info', 'Daily reminder status updated', { 
@@ -186,7 +183,7 @@ const setDailyReminderStatus = async (enabled, requestId) => {
   });
 };
 
-// Optimized single-query stats function
+// Database query functions
 const getIdeaStats = async (requestId) => {
   return executeWithRetry(async () => {
     logWithContext('info', 'Fetching idea statistics', { requestId });
@@ -217,7 +214,6 @@ const getIdeaStats = async (requestId) => {
     const result = await pool.query(query);
     const stats = result.rows[0];
     
-    // Format results
     return {
       total: parseInt(stats.total) || 0,
       categories: stats.categories || [],
@@ -310,12 +306,23 @@ const generateMotivationalMessage = (stats) => {
   return `${randomMessage}${categoryText}\n\n💡 Brug /hackathon-stats for fuld oversigt!\n\n<!channel> Få delt flere idéer! 🚀`;
 };
 
-// Main message handler with comprehensive error handling
+// Helper function for time formatting
+function getTimeAgo(date) {
+  const now = new Date();
+  const diffInSeconds = Math.floor((now - date) / 1000);
+  
+  if (diffInSeconds < 60) return 'lige nu';
+  if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)} min siden`;
+  if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)} timer siden`;
+  if (diffInSeconds < 2592000) return `${Math.floor(diffInSeconds / 86400)} dage siden`;
+  return date.toLocaleDateString('da-DK');
+}
+
+// Main message handler
 app.message(async ({ message, client }) => {
   const requestId = generateRequestId();
   
   try {
-    // Basic validation
     if (message.bot_id) return;
     
     if (process.env.HACKATHON_CHANNEL_ID && message.channel !== process.env.HACKATHON_CHANNEL_ID) {
@@ -326,7 +333,6 @@ app.message(async ({ message, client }) => {
       return;
     }
     
-    // Rate limiting
     if (isRateLimited(message.user)) {
       logWithContext('warn', 'User rate limited', { requestId, userId: message.user });
       return;
@@ -338,7 +344,6 @@ app.message(async ({ message, client }) => {
       messageLength: message.text.length 
     });
     
-    // Get username with fallback
     let username = 'Anonymous';
     try {
       const userInfo = await client.users.info({ user: message.user });
@@ -347,7 +352,6 @@ app.message(async ({ message, client }) => {
       logWithContext('warn', 'Could not fetch user info, using fallback', { requestId, error: error.message });
     }
     
-    // Categorize and save
     const category = categorizeIdea(message.text);
     
     const ideaId = await saveIdea(
@@ -364,7 +368,6 @@ app.message(async ({ message, client }) => {
       throw new Error('Failed to save idea to database');
     }
     
-    // Add reactions
     const randomReaction = REACTIONS[Math.floor(Math.random() * REACTIONS.length)];
     
     await Promise.all([
@@ -382,7 +385,6 @@ app.message(async ({ message, client }) => {
     
     logWithContext('info', 'Reactions added successfully', { requestId, ideaId });
     
-    // Send response with delay for dramatic effect
     setTimeout(async () => {
       try {
         const randomResponse = FUNNY_RESPONSES[Math.floor(Math.random() * FUNNY_RESPONSES.length)];
@@ -395,7 +397,6 @@ app.message(async ({ message, client }) => {
         
         await saveReaction(ideaId, 'response', randomResponse, requestId);
         
-        // Dad joke chance
         if (Math.random() < CONFIG.dadJokeChance) {
           setTimeout(async () => {
             try {
@@ -431,13 +432,12 @@ app.message(async ({ message, client }) => {
   }
 });
 
-// Enhanced stats command with loading state
+// Stats command
 app.command('/hackathon-stats', async ({ command, ack, respond }) => {
   const requestId = generateRequestId();
   await ack();
   
   try {
-    // Rate limiting
     if (isRateLimited(command.user_id)) {
       await respond({
         text: '⏳ Hold lige! Du spørger lidt for hurtigt. Prøv igen om lidt.',
@@ -498,7 +498,7 @@ _Fortsæt med at dele idéer i #hackathon-ideas!_
   }
 });
 
-// Enhanced manual motivation trigger
+// Manual motivation command
 app.command('/motivate-now', async ({ command, ack, respond }) => {
   const requestId = generateRequestId();
   await ack();
@@ -512,7 +512,6 @@ app.command('/motivate-now', async ({ command, ack, respond }) => {
       return;
     }
     
-    // Rate limiting even for admin
     if (isRateLimited(`admin_${command.user_id}`)) {
       await respond({
         text: '⏳ Vent lidt med at sende flere motivationsbeskeder.',
@@ -564,13 +563,12 @@ app.command('/motivate-now', async ({ command, ack, respond }) => {
   }
 });
 
-// NEW: Toggle daily reminder command
+// Toggle daily reminder command
 app.command('/toggle-daily-reminder', async ({ command, ack, respond }) => {
   const requestId = generateRequestId();
   await ack();
   
   try {
-    // Only admin can toggle
     if (command.user_id !== CONFIG.adminUserId) {
       await respond({
         text: '❌ Kun admin kan ændre daglige påmindelser!',
@@ -584,11 +582,9 @@ app.command('/toggle-daily-reminder', async ({ command, ack, respond }) => {
       adminId: command.user_id 
     });
     
-    // Get current status
     const currentStatus = await getDailyReminderStatus(requestId);
     const newStatus = !currentStatus;
     
-    // Update status
     await setDailyReminderStatus(newStatus, requestId);
     
     const statusEmoji = newStatus ? '✅' : '❌';
@@ -632,7 +628,6 @@ app.command('/toggle-daily-reminder', async ({ command, ack, respond }) => {
       ...responseBlocks
     });
     
-    // Log the change
     logWithContext('info', 'Daily reminder status toggled successfully', { 
       requestId,
       previousStatus: currentStatus,
@@ -640,7 +635,6 @@ app.command('/toggle-daily-reminder', async ({ command, ack, respond }) => {
       adminId: command.user_id
     });
     
-    // Optional: Send notification to hackathon channel about the change
     if (process.env.HACKATHON_CHANNEL_ID && newStatus !== currentStatus) {
       const channelMessage = newStatus ? 
         '🔔 Daglige påmindelser er nu aktiveret! I får besked hver dag kl. 09:00 🌅' :
@@ -673,7 +667,7 @@ app.command('/toggle-daily-reminder', async ({ command, ack, respond }) => {
   }
 });
 
-// NEW: Check reminder status command
+// Check reminder status command
 app.command('/reminder-status', async ({ command, ack, respond }) => {
   const requestId = generateRequestId();
   await ack();
@@ -715,7 +709,7 @@ app.command('/reminder-status', async ({ command, ack, respond }) => {
   }
 });
 
-// Help command for user guidance
+// Help command
 app.command('/hackathon-help', async ({ command, ack, respond }) => {
   await ack();
   
@@ -754,3 +748,543 @@ Start din besked med "Ide:" efterfulgt af din idé:
 - Check /leaderboard for at se din ranking
 
 **🚀 Ready to innovate? Start med "Ide:" og lad kreativiteten flyde!**
+  `;
+  
+  await respond({
+    text: helpMessage,
+    response_type: 'ephemeral'
+  });
+});
+
+// Leaderboard command
+app.command('/leaderboard', async ({ command, ack, respond }) => {
+  const requestId = generateRequestId();
+  await ack();
+  
+  try {
+    logWithContext('info', 'Leaderboard requested', { requestId, userId: command.user_id });
+    
+    const leaderboardQuery = `
+      SELECT 
+        username,
+        COUNT(*) as idea_count,
+        STRING_AGG(DISTINCT category, ', ') as categories,
+        MAX(created_at) as last_idea,
+        AVG(reaction_count) as avg_reactions
+      FROM (
+        SELECT 
+          i.username,
+          i.category,
+          i.created_at,
+          COUNT(r.id) as reaction_count
+        FROM ideas i
+        LEFT JOIN reactions r ON i.id = r.idea_id
+        GROUP BY i.id, i.username, i.category, i.created_at
+      ) stats
+      GROUP BY username
+      ORDER BY idea_count DESC, last_idea DESC
+      LIMIT 10
+    `;
+    
+    const result = await executeWithRetry(async () => {
+      return await pool.query(leaderboardQuery);
+    });
+    
+    const leaderboard = result.rows;
+    
+    if (leaderboard.length === 0) {
+      await respond({
+        text: '📊 Ingen data til leaderboard endnu!\n\nStart med at poste en idé: `Ide: Min fantastiske idé`',
+        response_type: 'ephemeral'
+      });
+      return;
+    }
+    
+    const getTrophy = (index) => {
+      if (index === 0) return '🏆';
+      if (index === 1) return '🥈';
+      if (index === 2) return '🥉';
+      return '🏅';
+    };
+    
+    const leaderboardBlocks = {
+      "blocks": [
+        {
+          "type": "header",
+          "text": {
+            "type": "plain_text",
+            "text": "🏆 Hackathon Leaderboard",
+            "emoji": true
+          }
+        },
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": "_Live ranking af idé-generatorer! 🚀_"
+          }
+        },
+        {
+          "type": "divider"
+        }
+      ]
+    };
+    
+    leaderboard.forEach((user, index) => {
+      const trophy = getTrophy(index);
+      const lastIdea = new Date(user.last_idea);
+      const timeAgo = getTimeAgo(lastIdea);
+      
+      leaderboardBlocks.blocks.push({
+        "type": "section",
+        "text": {
+          "type": "mrkdwn",
+          "text": `${trophy} *${index + 1}. ${user.username}*\n📊 ${user.idea_count} idéer • 🏷️ ${user.categories}\n⏰ Seneste: ${timeAgo} • 💬 Ø ${parseFloat(user.avg_reactions || 0).toFixed(1)} reaktioner`
+        }
+      });
+    });
+    
+    const motivationMessages = [
+      "🚀 Kom i gang med: `Ide: Din fantastiske idé her`",
+      "💡 Brug `/hackathon-help` for at se alle commands",
+      "🎯 Mål: 50+ idéer til hackathon!",
+      "⚡ Jo flere idéer, jo bedre hackathon!"
+    ];
+    
+    leaderboardBlocks.blocks.push(
+      {
+        "type": "divider"
+      },
+      {
+        "type": "section",
+        "text": {
+          "type": "mrkdwn",
+          "text": motivationMessages[Math.floor(Math.random() * motivationMessages.length)]
+        }
+      },
+      {
+        "type": "context",
+        "elements": [
+          {
+            "type": "mrkdwn",
+            "text": `🔄 Opdateret: ${new Date().toLocaleTimeString('da-DK', {timeZone: 'Europe/Copenhagen'})} | Brug \`/leaderboard\` for at opdatere`
+          }
+        ]
+      }
+    );
+    
+    await respond({
+      "response_type": "in_channel",
+      ...leaderboardBlocks
+    });
+    
+    logWithContext('info', 'Leaderboard displayed', { 
+      requestId,
+      totalUsers: leaderboard.length,
+      topUser: leaderboard[0]?.username
+    });
+    
+  } catch (error) {
+    logWithContext('error', 'Leaderboard failed', { requestId, error: error.message });
+    await respond({
+      text: `❌ Leaderboard kunne ikke indlæses: ${error.message}`,
+      response_type: 'ephemeral'
+    });
+  }
+});
+
+// Show ideas command
+app.command('/show-ideas', async ({ command, ack, respond }) => {
+  const requestId = generateRequestId();
+  await ack();
+  
+  try {
+    if (command.user_id !== CONFIG.adminUserId) {
+      await respond({
+        text: '❌ Kun admin kan vise alle idéer!',
+        response_type: 'ephemeral'
+      });
+      return;
+    }
+    
+    logWithContext('info', 'Visual ideas export requested', { requestId, adminId: command.user_id });
+    
+    await respond({
+      text: '🎨 Genererer visuelt overblik... ⏳',
+      response_type: 'ephemeral'
+    });
+    
+    const ideasQuery = `
+      SELECT 
+        i.id,
+        i.username,
+        i.idea_text,
+        i.category,
+        i.created_at,
+        COUNT(r.id) as reaction_count
+      FROM ideas i
+      LEFT JOIN reactions r ON i.id = r.idea_id
+      GROUP BY i.id, i.username, i.idea_text, i.category, i.created_at
+      ORDER BY i.created_at DESC
+    `;
+    
+    const result = await executeWithRetry(async () => {
+      return await pool.query(ideasQuery);
+    });
+    
+    const ideas = result.rows;
+    
+    if (ideas.length === 0) {
+      await respond({
+        text: '⚠️ Ingen idéer at vise endnu!',
+        response_type: 'ephemeral',
+        replace_original: true
+      });
+      return;
+    }
+    
+    const totalIdeas = ideas.length;
+    const uniqueUsers = new Set(ideas.map(i => i.username)).size;
+    const totalReactions = ideas.reduce((sum, idea) => sum + parseInt(idea.reaction_count), 0);
+    
+    const categoryStats = ideas.reduce((acc, idea) => {
+      acc[idea.category] = (acc[idea.category] || 0) + 1;
+      return acc;
+    }, {});
+    
+    const userStats = ideas.reduce((acc, idea) => {
+      acc[idea.username] = (acc[idea.username] || 0) + 1;
+      return acc;
+    }, {});
+    
+    const topUsers = Object.entries(userStats)
+      .sort(([,a], [,b]) => b - a)
+      .slice(0, 5);
+    
+    const dailyStats = ideas.reduce((acc, idea) => {
+      const date = new Date(idea.created_at).toLocaleDateString('da-DK');
+      acc[date] = (acc[date] || 0) + 1;
+      return acc;
+    }, {});
+    
+    const visualOverview = {
+      "blocks": [
+        {
+          "type": "header",
+          "text": {
+            "type": "plain_text",
+            "text": "🚀 Forteil Hackathon - Idé Overblik",
+            "emoji": true
+          }
+        },
+        {
+          "type": "section",
+          "fields": [
+            {
+              "type": "mrkdwn",
+              "text": `*📊 Total Idéer:*\n${totalIdeas}`
+            },
+            {
+              "type": "mrkdwn",
+              "text": `*👥 Aktive Brugere:*\n${uniqueUsers}`
+            },
+            {
+              "type": "mrkdwn",
+              "text": `*💬 Total Reaktioner:*\n${totalReactions}`
+            },
+            {
+              "type": "mrkdwn",
+              "text": `*📈 Gennemsnit per Bruger:*\n${(totalIdeas / uniqueUsers).toFixed(1)}`
+            }
+          ]
+        },
+        {
+          "type": "divider"
+        },
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": `*🏷️ Kategori Fordeling:*\n${Object.entries(categoryStats)
+              .sort(([,a], [,b]) => b - a)
+              .map(([cat, count]) => `${cat}: ${count} idéer (${Math.round(count/totalIdeas*100)}%)`)
+              .join('\n')}`
+          }
+        },
+        {
+          "type": "divider"
+        },
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": `*🏆 Top Idé-Generatorer:*\n${topUsers
+              .map(([user, count], index) => `${index + 1}. *${user}*: ${count} idéer`)
+              .join('\n')}`
+          }
+        },
+        {
+          "type": "divider"
+        },
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": `*📅 Daglig Aktivitet:*\n${Object.entries(dailyStats)
+              .sort(([a], [b]) => new Date(a.split('.').reverse().join('-')) - new Date(b.split('.').reverse().join('-')))
+              .map(([date, count]) => `${date}: ${count} idéer`)
+              .join('\n')}`
+          }
+        },
+        {
+          "type": "divider"
+        }
+      ]
+    };
+    
+    const recentIdeas = ideas.slice(0, 10);
+    
+    visualOverview.blocks.push({
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": `*💡 Seneste ${Math.min(10, ideas.length)} Idéer:*`
+      }
+    });
+    
+    recentIdeas.forEach((idea, index) => {
+      const date = new Date(idea.created_at);
+      const timeAgo = getTimeAgo(date);
+      
+      visualOverview.blocks.push({
+        "type": "section",
+        "text": {
+          "type": "mrkdwn",
+          "text": `*${index + 1}.* ${idea.idea_text.substring(0, 100)}${idea.idea_text.length > 100 ? '...' : ''}\n_${idea.category} • ${idea.username} • ${timeAgo} • ${idea.reaction_count} reaktioner_`
+        }
+      });
+    });
+    
+    visualOverview.blocks.push(
+      {
+        "type": "divider"
+      },
+      {
+        "type": "context",
+        "elements": [
+          {
+            "type": "mrkdwn",
+            "text": `📊 Genereret: ${new Date().toLocaleString('da-DK', {timeZone: 'Europe/Copenhagen'})} | 🤖 Forteil Hackathon Bot v2.1`
+          }
+        ]
+      }
+    );
+    
+    await respond({
+      "replace_original": true,
+      "response_type": "ephemeral",
+      ...visualOverview
+    });
+    
+    logWithContext('info', 'Visual ideas export completed', { 
+      requestId, 
+      totalIdeas,
+      uniqueUsers,
+      totalReactions
+    });
+    
+  } catch (error) {
+    logWithContext('error', 'Visual ideas export failed', { requestId, error: error.message });
+    await respond({
+      text: `❌ **Visuelt overblik fejlede:**\n\n\`\`\`${error.message}\`\`\``,
+      response_type: 'ephemeral',
+      replace_original: true
+    });
+  }
+});
+
+// Daily motivation cron with toggle check
+cron.schedule('0 9 * * *', async () => {
+  const requestId = generateRequestId();
+  
+  try {
+    logWithContext('info', 'Daily cron job triggered', { requestId });
+    
+    const isEnabled = await getDailyReminderStatus(requestId);
+    
+    if (!isEnabled) {
+      logWithContext('info', 'Daily reminders disabled, skipping cron job', { requestId });
+      return;
+    }
+    
+    if (!process.env.HACKATHON_CHANNEL_ID) {
+      logWithContext('warn', 'No HACKATHON_CHANNEL_ID set, skipping daily post', { requestId });
+      return;
+    }
+    
+    const stats = await getIdeaStats(requestId);
+    
+    if (!stats || stats.total === 0) {
+      logWithContext('info', 'No ideas available, skipping daily post', { requestId });
+      return;
+    }
+    
+    const dailyMessage = generateMotivationalMessage(stats);
+    
+    await app.client.chat.postMessage({
+      channel: process.env.HACKATHON_CHANNEL_ID,
+      text: dailyMessage
+    });
+    
+    logWithContext('info', 'Daily motivational message sent successfully', { 
+      requestId, 
+      totalIdeas: stats.total 
+    });
+    
+  } catch (error) {
+    logWithContext('error', 'Daily cron job failed', { 
+      requestId, 
+      error: error.message,
+      stack: error.stack
+    });
+    
+    try {
+      if (process.env.HACKATHON_CHANNEL_ID) {
+        await app.client.chat.postMessage({
+          channel: CONFIG.adminUserId,
+          text: `🚨 **Daily Motivation Cron Failed**\n\nTime: ${new Date().toISOString()}\nError: ${error.message}\n\nRequest ID: ${requestId}`
+        });
+      }
+    } catch (alertError) {
+      logWithContext('error', 'Failed to send admin alert', { requestId, error: alertError.message });
+    }
+  }
+}, {
+  timezone: "Europe/Copenhagen"
+});
+
+// Database initialization
+const initDB = async () => {
+  try {
+    logWithContext('info', 'Initializing database');
+    
+    const createIdeasTable = `
+      CREATE TABLE IF NOT EXISTS ideas (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255) NOT NULL,
+        username VARCHAR(255) NOT NULL,
+        idea_text TEXT NOT NULL,
+        category VARCHAR(255) NOT NULL,
+        message_ts VARCHAR(255) NOT NULL,
+        channel_id VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        
+        CONSTRAINT ideas_message_ts_unique UNIQUE(message_ts, channel_id)
+      )
+    `;
+    
+    const createReactionsTable = `
+      CREATE TABLE IF NOT EXISTS reactions (
+        id SERIAL PRIMARY KEY,
+        idea_id INTEGER REFERENCES ideas(id) ON DELETE CASCADE,
+        reaction_type VARCHAR(50) NOT NULL,
+        response_text TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      )
+    `;
+
+    const createSettingsTable = `
+      CREATE TABLE IF NOT EXISTS bot_settings (
+        id SERIAL PRIMARY KEY,
+        setting_key VARCHAR(255) UNIQUE NOT NULL,
+        setting_value TEXT NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      )
+    `;
+    
+    const createIndexes = `
+      CREATE INDEX IF NOT EXISTS idx_ideas_created_at ON ideas(created_at);
+      CREATE INDEX IF NOT EXISTS idx_ideas_category ON ideas(category);
+      CREATE INDEX IF NOT EXISTS idx_ideas_user_id ON ideas(user_id);
+      CREATE INDEX IF NOT EXISTS idx_reactions_idea_id ON reactions(idea_id);
+      CREATE INDEX IF NOT EXISTS idx_bot_settings_key ON bot_settings(setting_key);
+    `;
+    
+    await pool.query(createIdeasTable);
+    await pool.query(createReactionsTable);
+    await pool.query(createSettingsTable);
+    await pool.query(createIndexes);
+    
+    logWithContext('info', 'Database tables and indexes created/verified');
+    
+    await pool.query('SELECT 1');
+    logWithContext('info', 'Database connection test successful');
+    
+  } catch (error) {
+    logWithContext('error', 'Database initialization failed', { 
+      error: error.message,
+      stack: error.stack 
+    });
+    throw error;
+  }
+};
+
+// Startup
+(async () => {
+  try {
+    logWithContext('info', 'Starting Forteil Hackathon Bot v2.1.0 with Daily Reminder Toggle');
+    
+    const requiredEnvVars = ['SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET', 'DATABASE_URL'];
+    const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+    
+    if (missingVars.length > 0) {
+      throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+    }
+    
+    await initDB();
+    
+    try {
+      dailyReminderEnabled = await getDailyReminderStatus('startup');
+      logWithContext('info', 'Daily reminder status loaded', { 
+        enabled: dailyReminderEnabled 
+      });
+    } catch (error) {
+      logWithContext('warn', 'Could not load daily reminder status, using default', { 
+        error: error.message,
+        defaultEnabled: dailyReminderEnabled
+      });
+    }
+    
+    await app.start();
+    
+    logWithContext('info', 'Forteil Hackathon Bot started successfully', {
+      port: process.env.PORT || 3000,
+      environment: process.env.NODE_ENV || 'development',
+      adminUser: CONFIG.adminUserId,
+      dadJokeChance: CONFIG.dadJokeChance,
+      dailyRemindersEnabled: dailyReminderEnabled
+    });
+    
+  } catch (error) {
+    logWithContext('error', 'Failed to start application', { 
+      error: error.message,
+      stack: error.stack 
+    });
+    process.exit(1);
+  }
+})();
+
+module.exports = { app, pool };
+
+// Periodic cleanup of rate limit store
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, timestamps] of rateLimitStore.entries()) {
+    const validTimestamps = timestamps.filter(time => now - time < CONFIG.rateLimitWindow);
+    if (validTimestamps.length === 0) {
+      rateLimitStore.delete(userId);
+    } else {
+      rateLimitStore.set(userId, validTimestamps);
+    }
+  }
+}, CONFIG.rateLimitWindow);
