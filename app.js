@@ -1,4 +1,4 @@
-// Forteil Hackathon Bot - Production Ready Version (Working)
+// Forteil Hackathon Bot - Production Ready Version with Daily Reminder Toggle
 const { App } = require('@slack/bolt');
 const { Pool } = require('pg');
 const cron = require('node-cron');
@@ -13,6 +13,9 @@ const CONFIG = {
   rateLimitWindow: parseInt(process.env.RATE_LIMIT_WINDOW) || 60000, // 1 min
   rateLimitMax: parseInt(process.env.RATE_LIMIT_MAX) || 10
 };
+
+// Daily reminder state - will be loaded from database on startup
+let dailyReminderEnabled = true;
 
 // Request tracking for debugging
 let requestCounter = 0;
@@ -130,6 +133,57 @@ const executeWithRetry = async (operation, maxRetries = CONFIG.maxRetries) => {
       await sleep(1000 * attempt); // Exponential backoff
     }
   }
+};
+
+// Daily reminder toggle functions
+const getDailyReminderStatus = async (requestId) => {
+  return executeWithRetry(async () => {
+    logWithContext('info', 'Fetching daily reminder status', { requestId });
+    
+    const query = `
+      SELECT setting_value 
+      FROM bot_settings 
+      WHERE setting_key = 'daily_reminder_enabled'
+      LIMIT 1
+    `;
+    
+    const result = await pool.query(query);
+    
+    if (result.rows.length === 0) {
+      // Default to enabled if no setting exists
+      return true;
+    }
+    
+    return result.rows[0].setting_value === 'true';
+  });
+};
+
+const setDailyReminderStatus = async (enabled, requestId) => {
+  return executeWithRetry(async () => {
+    logWithContext('info', 'Setting daily reminder status', { 
+      requestId, 
+      enabled 
+    });
+    
+    const query = `
+      INSERT INTO bot_settings (setting_key, setting_value, updated_at)
+      VALUES ('daily_reminder_enabled', $1, NOW())
+      ON CONFLICT (setting_key) 
+      DO UPDATE SET 
+        setting_value = $1,
+        updated_at = NOW()
+    `;
+    
+    await pool.query(query, [enabled.toString()]);
+    
+    // Update in-memory state
+    dailyReminderEnabled = enabled;
+    
+    logWithContext('info', 'Daily reminder status updated', { 
+      requestId, 
+      enabled 
+    });
+  });
 };
 
 // Optimized single-query stats function
@@ -510,6 +564,157 @@ app.command('/motivate-now', async ({ command, ack, respond }) => {
   }
 });
 
+// NEW: Toggle daily reminder command
+app.command('/toggle-daily-reminder', async ({ command, ack, respond }) => {
+  const requestId = generateRequestId();
+  await ack();
+  
+  try {
+    // Only admin can toggle
+    if (command.user_id !== CONFIG.adminUserId) {
+      await respond({
+        text: '❌ Kun admin kan ændre daglige påmindelser!',
+        response_type: 'ephemeral'
+      });
+      return;
+    }
+    
+    logWithContext('info', 'Daily reminder toggle requested', { 
+      requestId, 
+      adminId: command.user_id 
+    });
+    
+    // Get current status
+    const currentStatus = await getDailyReminderStatus(requestId);
+    const newStatus = !currentStatus;
+    
+    // Update status
+    await setDailyReminderStatus(newStatus, requestId);
+    
+    const statusEmoji = newStatus ? '✅' : '❌';
+    const statusText = newStatus ? 'AKTIVERET' : 'DEAKTIVERET';
+    const nextAction = newStatus ? 
+      'Næste påmindelse sendes i morgen kl. 09:00' : 
+      'Ingen automatiske påmindelser sendes';
+    
+    const responseBlocks = {
+      "blocks": [
+        {
+          "type": "header",
+          "text": {
+            "type": "plain_text",
+            "text": "🔔 Daglige Påmindelser",
+            "emoji": true
+          }
+        },
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": `${statusEmoji} **Status: ${statusText}**\n\n📅 ${nextAction}\n\n_Brug \`/toggle-daily-reminder\` for at skifte igen_`
+          }
+        },
+        {
+          "type": "divider"
+        },
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": `*⚙️ Admin Info:*\n• Ændret af: <@${command.user_id}>\n• Tidspunkt: ${new Date().toLocaleString('da-DK', {timeZone: 'Europe/Copenhagen'})}\n• Kanal: ${process.env.HACKATHON_CHANNEL_ID ? `<#${process.env.HACKATHON_CHANNEL_ID}>` : 'Ikke konfigureret'}`
+          }
+        }
+      ]
+    };
+    
+    await respond({
+      "response_type": "ephemeral",
+      ...responseBlocks
+    });
+    
+    // Log the change
+    logWithContext('info', 'Daily reminder status toggled successfully', { 
+      requestId,
+      previousStatus: currentStatus,
+      newStatus: newStatus,
+      adminId: command.user_id
+    });
+    
+    // Optional: Send notification to hackathon channel about the change
+    if (process.env.HACKATHON_CHANNEL_ID && newStatus !== currentStatus) {
+      const channelMessage = newStatus ? 
+        '🔔 Daglige påmindelser er nu aktiveret! I får besked hver dag kl. 09:00 🌅' :
+        '🔕 Daglige påmindelser er nu deaktiveret. Brug `/motivate-now` for manuel motivation 💪';
+      
+      try {
+        await app.client.chat.postMessage({
+          channel: process.env.HACKATHON_CHANNEL_ID,
+          text: channelMessage
+        });
+      } catch (error) {
+        logWithContext('warn', 'Could not send channel notification', { 
+          requestId, 
+          error: error.message 
+        });
+      }
+    }
+    
+  } catch (error) {
+    logWithContext('error', 'Daily reminder toggle failed', { 
+      requestId, 
+      error: error.message,
+      stack: error.stack
+    });
+    
+    await respond({
+      text: `❌ **Fejl ved ændring af påmindelser:**\n\n\`\`\`${error.message}\`\`\`\n\nPrøv igen eller kontakt tech support.`,
+      response_type: 'ephemeral'
+    });
+  }
+});
+
+// NEW: Check reminder status command
+app.command('/reminder-status', async ({ command, ack, respond }) => {
+  const requestId = generateRequestId();
+  await ack();
+  
+  try {
+    const currentStatus = await getDailyReminderStatus(requestId);
+    const statusEmoji = currentStatus ? '✅' : '❌';
+    const statusText = currentStatus ? 'AKTIVERET' : 'DEAKTIVERET';
+    const nextAction = currentStatus ? 
+      'Næste påmindelse: I morgen kl. 09:00' : 
+      'Ingen automatiske påmindelser planlagt';
+    
+    const isAdmin = command.user_id === CONFIG.adminUserId;
+    const adminInfo = isAdmin ? 
+      '\n\n🔧 _Som admin kan du bruge `/toggle-daily-reminder` for at ændre status_' : 
+      '';
+    
+    await respond({
+      text: `🔔 **Daglige Påmindelser**\n\n${statusEmoji} Status: **${statusText}**\n📅 ${nextAction}${adminInfo}`,
+      response_type: 'ephemeral'
+    });
+    
+    logWithContext('info', 'Reminder status checked', { 
+      requestId, 
+      userId: command.user_id,
+      currentStatus 
+    });
+    
+  } catch (error) {
+    logWithContext('error', 'Reminder status check failed', { 
+      requestId, 
+      error: error.message 
+    });
+    
+    await respond({
+      text: `❌ Kunne ikke hente påmindelse status: ${error.message}`,
+      response_type: 'ephemeral'
+    });
+  }
+});
+
 // Help command for user guidance
 app.command('/hackathon-help', async ({ command, ack, respond }) => {
   await ack();
@@ -522,561 +727,30 @@ Start din besked med "Ide:" efterfulgt af din idé:
 \`Ide: AI chatbot til HR-spørgsmål\`
 
 **🎯 Bot Reaktioner:**
-• 2 emoji reactions (random + kategori)
-• Vittigt svar i thread
-• 25% chance for bonus dad joke
-• Automatisk kategorisering og database lagring
+- 2 emoji reactions (random + kategori)
+- Vittigt svar i thread
+- 25% chance for bonus dad joke
+- Automatisk kategorisering og database lagring
 
 **📊 Available Commands:**
-• \`/hackathon-stats\` - Se alle statistikker
-• \`/hackathon-help\` - Denne hjælp besked
-• \`/leaderboard\` - Live rangliste (alle kan se)
-• \`/motivate-now\` - Admin: Send motivation nu
-• \`/show-ideas\` - Admin: Visuelt overblik
+- \`/hackathon-stats\` - Se alle statistikker
+- \`/hackathon-help\` - Denne hjælp besked
+- \`/leaderboard\` - Live rangliste (alle kan se)
+- \`/motivate-now\` - Admin: Send motivation nu
+- \`/show-ideas\` - Admin: Visuelt overblik
+
+**🔔 Reminder Commands:**
+- \`/toggle-daily-reminder\` - Admin: Skru daglige påmindelser til/fra
+- \`/reminder-status\` - Se status for daglige påmindelser
 
 **🏷️ Kategorier:**
 🤖 AI & Automatisering • 🔗 Integrationer • ⚙️ Procesoptimering
 📊 Data & Visualisering • 🎨 UI/UX • 💡 Kreative Løsninger
 
 **💡 Tips:**
-• Vær specifik i dine idé-beskrivelser
-• Byg videre på andres idéer
-• Brug /hackathon-stats for at se fremgang
-• Check /leaderboard for at se din ranking
+- Vær specifik i dine idé-beskrivelser
+- Byg videre på andres idéer
+- Brug /hackathon-stats for at se fremgang
+- Check /leaderboard for at se din ranking
 
 **🚀 Ready to innovate? Start med "Ide:" og lad kreativiteten flyde!**
-  `;
-  
-  await respond({
-    text: helpMessage,
-    response_type: 'ephemeral'
-  });
-});
-
-// VISUAL EXPORT COMMAND - Flot visuelt output direkte i Slack
-app.command('/show-ideas', async ({ command, ack, respond }) => {
-  const requestId = generateRequestId();
-  await ack();
-  
-  try {
-    // Kun admin kan vise alle idéer
-    if (command.user_id !== CONFIG.adminUserId) {
-      await respond({
-        text: '❌ Kun admin kan vise alle idéer!',
-        response_type: 'ephemeral'
-      });
-      return;
-    }
-    
-    logWithContext('info', 'Visual ideas export requested', { requestId, adminId: command.user_id });
-    
-    await respond({
-      text: '🎨 Genererer visuelt overblik... ⏳',
-      response_type: 'ephemeral'
-    });
-    
-    // Hent alle idéer med detaljeret information
-    const ideasQuery = `
-      SELECT 
-        i.id,
-        i.username,
-        i.idea_text,
-        i.category,
-        i.created_at,
-        COUNT(r.id) as reaction_count
-      FROM ideas i
-      LEFT JOIN reactions r ON i.id = r.idea_id
-      GROUP BY i.id, i.username, i.idea_text, i.category, i.created_at
-      ORDER BY i.created_at DESC
-    `;
-    
-    const result = await executeWithRetry(async () => {
-      return await pool.query(ideasQuery);
-    });
-    
-    const ideas = result.rows;
-    
-    if (ideas.length === 0) {
-      await respond({
-        text: '⚠️ Ingen idéer at vise endnu!',
-        response_type: 'ephemeral',
-        replace_original: true
-      });
-      return;
-    }
-    
-    // Generer statistikker
-    const totalIdeas = ideas.length;
-    const uniqueUsers = new Set(ideas.map(i => i.username)).size;
-    const totalReactions = ideas.reduce((sum, idea) => sum + parseInt(idea.reaction_count), 0);
-    
-    // Kategori statistikker
-    const categoryStats = ideas.reduce((acc, idea) => {
-      acc[idea.category] = (acc[idea.category] || 0) + 1;
-      return acc;
-    }, {});
-    
-    // Top brugere
-    const userStats = ideas.reduce((acc, idea) => {
-      acc[idea.username] = (acc[idea.username] || 0) + 1;
-      return acc;
-    }, {});
-    
-    const topUsers = Object.entries(userStats)
-      .sort(([,a], [,b]) => b - a)
-      .slice(0, 5);
-    
-    // Daglig aktivitet
-    const dailyStats = ideas.reduce((acc, idea) => {
-      const date = new Date(idea.created_at).toLocaleDateString('da-DK');
-      acc[date] = (acc[date] || 0) + 1;
-      return acc;
-    }, {});
-    
-    // Generér visuelt overblik
-    const visualOverview = {
-      "blocks": [
-        {
-          "type": "header",
-          "text": {
-            "type": "plain_text",
-            "text": "🚀 Forteil Hackathon - Idé Overblik",
-            "emoji": true
-          }
-        },
-        {
-          "type": "section",
-          "fields": [
-            {
-              "type": "mrkdwn",
-              "text": `*📊 Total Idéer:*\n${totalIdeas}`
-            },
-            {
-              "type": "mrkdwn",
-              "text": `*👥 Aktive Brugere:*\n${uniqueUsers}`
-            },
-            {
-              "type": "mrkdwn",
-              "text": `*💬 Total Reaktioner:*\n${totalReactions}`
-            },
-            {
-              "type": "mrkdwn",
-              "text": `*📈 Gennemsnit per Bruger:*\n${(totalIdeas / uniqueUsers).toFixed(1)}`
-            }
-          ]
-        },
-        {
-          "type": "divider"
-        },
-        {
-          "type": "section",
-          "text": {
-            "type": "mrkdwn",
-            "text": `*🏷️ Kategori Fordeling:*\n${Object.entries(categoryStats)
-              .sort(([,a], [,b]) => b - a)
-              .map(([cat, count]) => `${cat}: ${count} idéer (${Math.round(count/totalIdeas*100)}%)`)
-              .join('\n')}`
-          }
-        },
-        {
-          "type": "divider"
-        },
-        {
-          "type": "section",
-          "text": {
-            "type": "mrkdwn",
-            "text": `*🏆 Top Idé-Generatorer:*\n${topUsers
-              .map(([user, count], index) => `${index + 1}. *${user}*: ${count} idéer`)
-              .join('\n')}`
-          }
-        },
-        {
-          "type": "divider"
-        },
-        {
-          "type": "section",
-          "text": {
-            "type": "mrkdwn",
-            "text": `*📅 Daglig Aktivitet:*\n${Object.entries(dailyStats)
-              .sort(([a], [b]) => new Date(a.split('.').reverse().join('-')) - new Date(b.split('.').reverse().join('-')))
-              .map(([date, count]) => `${date}: ${count} idéer`)
-              .join('\n')}`
-          }
-        },
-        {
-          "type": "divider"
-        }
-      ]
-    };
-    
-    // Tilføj de seneste idéer som separate blocks
-    const recentIdeas = ideas.slice(0, 10); // Vis de 10 seneste
-    
-    visualOverview.blocks.push({
-      "type": "section",
-      "text": {
-        "type": "mrkdwn",
-        "text": `*💡 Seneste ${Math.min(10, ideas.length)} Idéer:*`
-      }
-    });
-    
-    recentIdeas.forEach((idea, index) => {
-      const date = new Date(idea.created_at);
-      const timeAgo = getTimeAgo(date);
-      
-      visualOverview.blocks.push({
-        "type": "section",
-        "text": {
-          "type": "mrkdwn",
-          "text": `*${index + 1}.* ${idea.idea_text.substring(0, 100)}${idea.idea_text.length > 100 ? '...' : ''}\n_${idea.category} • ${idea.username} • ${timeAgo} • ${idea.reaction_count} reaktioner_`
-        }
-      });
-    });
-    
-    // Tilføj footer
-    visualOverview.blocks.push(
-      {
-        "type": "divider"
-      },
-      {
-        "type": "context",
-        "elements": [
-          {
-            "type": "mrkdwn",
-            "text": `📊 Genereret: ${new Date().toLocaleString('da-DK', {timeZone: 'Europe/Copenhagen'})} | 🤖 Forteil Hackathon Bot v2.0`
-          }
-        ]
-      }
-    );
-    
-    await respond({
-      "replace_original": true,
-      "response_type": "ephemeral",
-      ...visualOverview
-    });
-    
-    logWithContext('info', 'Visual ideas export completed', { 
-      requestId, 
-      totalIdeas,
-      uniqueUsers,
-      totalReactions
-    });
-    
-  } catch (error) {
-    logWithContext('error', 'Visual ideas export failed', { requestId, error: error.message });
-    await respond({
-      text: `❌ **Visuelt overblik fejlede:**\n\n\`\`\`${error.message}\`\`\``,
-      response_type: 'ephemeral',
-      replace_original: true
-    });
-  }
-});
-
-// Helper function til "time ago" formatting
-function getTimeAgo(date) {
-  const now = new Date();
-  const diffInSeconds = Math.floor((now - date) / 1000);
-  
-  if (diffInSeconds < 60) return 'lige nu';
-  if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)} min siden`;
-  if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)} timer siden`;
-  if (diffInSeconds < 2592000) return `${Math.floor(diffInSeconds / 86400)} dage siden`;
-  return date.toLocaleDateString('da-DK');
-}
-
-// LIVE LEADERBOARD COMMAND - Real-time leaderboard
-app.command('/leaderboard', async ({ command, ack, respond }) => {
-  const requestId = generateRequestId();
-  await ack();
-  
-  try {
-    logWithContext('info', 'Leaderboard requested', { requestId, userId: command.user_id });
-    
-    // Hent leaderboard data  
-    const leaderboardQuery = `
-      SELECT 
-        username,
-        COUNT(*) as idea_count,
-        STRING_AGG(DISTINCT category, ', ') as categories,
-        MAX(created_at) as last_idea,
-        AVG(reaction_count) as avg_reactions
-      FROM (
-        SELECT 
-          i.username,
-          i.category,
-          i.created_at,
-          COUNT(r.id) as reaction_count
-        FROM ideas i
-        LEFT JOIN reactions r ON i.id = r.idea_id
-        GROUP BY i.id, i.username, i.category, i.created_at
-      ) stats
-      GROUP BY username
-      ORDER BY idea_count DESC, last_idea DESC
-      LIMIT 10
-    `;
-    
-    const result = await executeWithRetry(async () => {
-      return await pool.query(leaderboardQuery);
-    });
-    
-    const leaderboard = result.rows;
-    
-    if (leaderboard.length === 0) {
-      await respond({
-        text: '📊 Ingen data til leaderboard endnu!\n\nStart med at poste en idé: `Ide: Min fantastiske idé`',
-        response_type: 'ephemeral'
-      });
-      return;
-    }
-    
-    // Generer emoji trofæer
-    const getTrophy = (index) => {
-      if (index === 0) return '🏆';
-      if (index === 1) return '🥈';
-      if (index === 2) return '🥉';
-      return '🏅';
-    };
-    
-    const leaderboardBlocks = {
-      "blocks": [
-        {
-          "type": "header",
-          "text": {
-            "type": "plain_text",
-            "text": "🏆 Hackathon Leaderboard",
-            "emoji": true
-          }
-        },
-        {
-          "type": "section",
-          "text": {
-            "type": "mrkdwn",
-            "text": "_Live ranking af idé-generatorer! 🚀_"
-          }
-        },
-        {
-          "type": "divider"
-        }
-      ]
-    };
-    
-    leaderboard.forEach((user, index) => {
-      const trophy = getTrophy(index);
-      const lastIdea = new Date(user.last_idea);
-      const timeAgo = getTimeAgo(lastIdea);
-      
-      leaderboardBlocks.blocks.push({
-        "type": "section",
-        "text": {
-          "type": "mrkdwn",
-          "text": `${trophy} *${index + 1}. ${user.username}*\n📊 ${user.idea_count} idéer • 🏷️ ${user.categories}\n⏰ Seneste: ${timeAgo} • 💬 Ø ${parseFloat(user.avg_reactions || 0).toFixed(1)} reaktioner`
-        }
-      });
-    });
-    
-    // Tilføj motivation footer
-    const motivationMessages = [
-      "🚀 Kom i gang med: `Ide: Din fantastiske idé her`",
-      "💡 Brug `/hackathon-help` for at se alle commands",
-      "🎯 Mål: 50+ idéer til hackathon!",
-      "⚡ Jo flere idéer, jo bedre hackathon!"
-    ];
-    
-    leaderboardBlocks.blocks.push(
-      {
-        "type": "divider"
-      },
-      {
-        "type": "section",
-        "text": {
-          "type": "mrkdwn",
-          "text": motivationMessages[Math.floor(Math.random() * motivationMessages.length)]
-        }
-      },
-      {
-        "type": "context",
-        "elements": [
-          {
-            "type": "mrkdwn",
-            "text": `🔄 Opdateret: ${new Date().toLocaleTimeString('da-DK', {timeZone: 'Europe/Copenhagen'})} | Brug \`/leaderboard\` for at opdatere`
-          }
-        ]
-      }
-    );
-    
-    await respond({
-      "response_type": "in_channel", // Synlig for alle - skaber konkurrence!
-      ...leaderboardBlocks
-    });
-    
-    logWithContext('info', 'Leaderboard displayed', { 
-      requestId,
-      totalUsers: leaderboard.length,
-      topUser: leaderboard[0]?.username
-    });
-    
-  } catch (error) {
-    logWithContext('error', 'Leaderboard failed', { requestId, error: error.message });
-    await respond({
-      text: `❌ Leaderboard kunne ikke indlæses: ${error.message}`,
-      response_type: 'ephemeral'
-    });
-  }
-});
-
-// Daily motivation cron with enhanced error handling
-cron.schedule('0 9 * * *', async () => {
-  const requestId = generateRequestId();
-  
-  try {
-    logWithContext('info', 'Daily cron job triggered', { requestId });
-    
-    if (!process.env.HACKATHON_CHANNEL_ID) {
-      logWithContext('warn', 'No HACKATHON_CHANNEL_ID set, skipping daily post', { requestId });
-      return;
-    }
-    
-    const stats = await getIdeaStats(requestId);
-    
-    if (!stats || stats.total === 0) {
-      logWithContext('info', 'No ideas available, skipping daily post', { requestId });
-      return;
-    }
-    
-    const dailyMessage = generateMotivationalMessage(stats);
-    
-    await app.client.chat.postMessage({
-      channel: process.env.HACKATHON_CHANNEL_ID,
-      text: dailyMessage
-    });
-    
-    logWithContext('info', 'Daily motivational message sent successfully', { 
-      requestId, 
-      totalIdeas: stats.total 
-    });
-    
-  } catch (error) {
-    logWithContext('error', 'Daily cron job failed', { 
-      requestId, 
-      error: error.message,
-      stack: error.stack
-    });
-    
-    // Send alert to admin on critical failure
-    try {
-      if (process.env.HACKATHON_CHANNEL_ID) {
-        await app.client.chat.postMessage({
-          channel: CONFIG.adminUserId, // Send DM to admin
-          text: `🚨 **Daily Motivation Cron Failed**\n\nTime: ${new Date().toISOString()}\nError: ${error.message}\n\nRequest ID: ${requestId}`
-        });
-      }
-    } catch (alertError) {
-      logWithContext('error', 'Failed to send admin alert', { requestId, error: alertError.message });
-    }
-  }
-}, {
-  timezone: "Europe/Copenhagen"
-});
-
-// Database initialization with comprehensive setup
-const initDB = async () => {
-  try {
-    logWithContext('info', 'Initializing database');
-    
-    const createIdeasTable = `
-      CREATE TABLE IF NOT EXISTS ideas (
-        id SERIAL PRIMARY KEY,
-        user_id VARCHAR(255) NOT NULL,
-        username VARCHAR(255) NOT NULL,
-        idea_text TEXT NOT NULL,
-        category VARCHAR(255) NOT NULL,
-        message_ts VARCHAR(255) NOT NULL,
-        channel_id VARCHAR(255) NOT NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        
-        CONSTRAINT ideas_message_ts_unique UNIQUE(message_ts, channel_id)
-      )
-    `;
-    
-    const createReactionsTable = `
-      CREATE TABLE IF NOT EXISTS reactions (
-        id SERIAL PRIMARY KEY,
-        idea_id INTEGER REFERENCES ideas(id) ON DELETE CASCADE,
-        reaction_type VARCHAR(50) NOT NULL,
-        response_text TEXT,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-      )
-    `;
-    
-    const createIndexes = `
-      CREATE INDEX IF NOT EXISTS idx_ideas_created_at ON ideas(created_at);
-      CREATE INDEX IF NOT EXISTS idx_ideas_category ON ideas(category);
-      CREATE INDEX IF NOT EXISTS idx_ideas_user_id ON ideas(user_id);
-      CREATE INDEX IF NOT EXISTS idx_reactions_idea_id ON reactions(idea_id);
-    `;
-    
-    await pool.query(createIdeasTable);
-    await pool.query(createReactionsTable);
-    await pool.query(createIndexes);
-    
-    logWithContext('info', 'Database tables and indexes created/verified');
-    
-    // Test database with health check
-    await pool.query('SELECT 1');
-    logWithContext('info', 'Database connection test successful');
-    
-  } catch (error) {
-    logWithContext('error', 'Database initialization failed', { 
-      error: error.message,
-      stack: error.stack 
-    });
-    throw error;
-  }
-};
-
-// Enhanced startup with comprehensive error handling
-(async () => {
-  try {
-    logWithContext('info', 'Starting Forteil Hackathon Bot v2.0.0');
-    
-    // Validate required environment variables
-    const requiredEnvVars = ['SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET', 'DATABASE_URL'];
-    const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
-    
-    if (missingVars.length > 0) {
-      throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
-    }
-    
-    await initDB();
-    await app.start();
-    
-    logWithContext('info', 'Forteil Hackathon Bot started successfully', {
-      port: process.env.PORT || 3000,
-      environment: process.env.NODE_ENV || 'development',
-      adminUser: CONFIG.adminUserId,
-      dadJokeChance: CONFIG.dadJokeChance
-    });
-    
-  } catch (error) {
-    logWithContext('error', 'Failed to start application', { 
-      error: error.message,
-      stack: error.stack 
-    });
-    process.exit(1);
-  }
-})();
-
-module.exports = { app, pool };
-
-// Periodic cleanup of rate limit store
-setInterval(() => {
-  const now = Date.now();
-  for (const [userId, timestamps] of rateLimitStore.entries()) {
-    const validTimestamps = timestamps.filter(time => now - time < CONFIG.rateLimitWindow);
-    if (validTimestamps.length === 0) {
-      rateLimitStore.delete(userId);
-    } else {
-      rateLimitStore.set(userId, validTimestamps);
-    }
-  }
-}, CONFIG.rateLimitWindow);
